@@ -1,0 +1,5 @@
+*.exe
+*.pdb
+*.obj
+clock_error.txt
+clock_settings.ini
