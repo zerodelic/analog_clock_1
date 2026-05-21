@@ -147,6 +147,7 @@ class ClockForm : Form
     {
         cfg = Settings.Load();
         Text = "Clock";
+        try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch {}
         FormBorderStyle = FormBorderStyle.None;
         StartPosition   = FormStartPosition.Manual;
         TopMost         = true;
