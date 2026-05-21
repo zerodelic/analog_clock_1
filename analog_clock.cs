@@ -171,7 +171,7 @@ class ClockForm : Form
         var mSet = new ToolStripMenuItem("Settings");
         mSet.Click += (s, e) => OpenSettings();
         var mExit = new ToolStripMenuItem("Exit");
-        mExit.Click += (s, e) => Close();
+        mExit.Click += (s, e) => { cfg.PosX = Left; cfg.PosY = Top; cfg.Save(); Close(); };
         ctx.Items.Add(mSet); ctx.Items.Add(mExit);
         ContextMenuStrip = ctx;
     }
@@ -466,7 +466,8 @@ class SettingsForm : Form
         bReset.Click += (s,e) => { temp=saved.Clone(); RefreshAll(); Notify(); };
         Add(bReset);
 
-        var bClose = new Button { Text="Close", Location=new Point(222,y), Size=new Size(72,28), DialogResult=DialogResult.OK };
+        var bClose = new Button { Text="Close", Location=new Point(222,y), Size=new Size(72,28) };
+        bClose.Click += (s,e) => Close();
         Add(bClose); CancelButton=bClose;
     }
 
