@@ -421,29 +421,43 @@ class ClockForm : Form
     }
 
     // 内蔵ディスプレイを検出して返す。見つからない場合はプライマリスクリーンを返す。
-    static Screen FindBuiltinScreen()
+    static Screen FindBuiltinScreen() { string _; return FindBuiltinScreen(out _); }
+
+    public static Screen FindBuiltinScreen(out string status)
     {
+        int total = Screen.AllScreens.Length;
+        if (total == 1) {
+            var s = Screen.PrimaryScreen;
+            status = string.Format("シングルモニター  {0}x{1}", s.Bounds.Width, s.Bounds.Height);
+            return s;
+        }
         try {
             var dd = new W32.DISPLAY_DEVICE();
             dd.cb = Marshal.SizeOf(dd);
             for (uint i = 0; W32.EnumDisplayDevices(null, i, ref dd, 0); i++) {
-                // デスクトップに接続されているアダプタのみ対象
                 if ((dd.StateFlags & W32.DD_ATTACHED) == 0) { dd.cb = Marshal.SizeOf(dd); continue; }
                 string adapterName = dd.DeviceName;
-                // このアダプタに接続されているモニターを調べる
                 var mon = new W32.DISPLAY_DEVICE();
                 mon.cb = Marshal.SizeOf(mon);
                 if (W32.EnumDisplayDevices(adapterName, 0, ref mon, 0)) {
-                    // REMOVABLE フラグがない = 取り外し不可 = 内蔵ディスプレイ
                     if ((mon.StateFlags & W32.DD_REMOVABLE) == 0) {
-                        foreach (var scr in Screen.AllScreens)
-                            if (scr.DeviceName == adapterName) return scr;
+                        foreach (var scr in Screen.AllScreens) {
+                            if (scr.DeviceName == adapterName) {
+                                status = string.Format("内蔵モニター検出  {0}  {1}x{2}",
+                                    adapterName.Replace("\\\\.\\", ""),
+                                    scr.Bounds.Width, scr.Bounds.Height);
+                                return scr;
+                            }
+                        }
                     }
                 }
                 dd.cb = Marshal.SizeOf(dd);
             }
         } catch {}
-        return Screen.PrimaryScreen;
+        var fallback = Screen.PrimaryScreen;
+        status = string.Format("検出失敗 → プライマリ使用  {0}x{1}",
+            fallback.Bounds.Width, fallback.Bounds.Height);
+        return fallback;
     }
 }
 
@@ -501,7 +515,7 @@ class SettingsForm : Form
 
         Text            = "Clock Settings";
         Width           = 320;
-        Height          = 590;
+        Height          = 620;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox     = false; MinimizeBox = false;
         StartPosition   = FormStartPosition.Manual;
@@ -562,6 +576,22 @@ class SettingsForm : Form
         Add(bClose); CancelButton=bClose;
 
         y += 38;
+        Hsep(ref y);
+
+        // モニター検出状況
+        string screenStatus;
+        ClockForm.FindBuiltinScreen(out screenStatus);
+        Add(new Label { Text="Monitor", Font=new Font("Segoe UI",9,FontStyle.Bold),
+            Location=new Point(14,y), AutoSize=true }); y+=22;
+        Add(new Label {
+            Text      = screenStatus,
+            Location  = new Point(14, y),
+            Size      = new Size(278, 32),
+            ForeColor = Color.DimGray,
+            Font      = new Font("Segoe UI", 8f),
+        }); y += 34;
+
+        // バージョン
         var lbVer = new Label {
             Text      = "Analog Clock  v" + Program.Version,
             Location  = new Point(14, y),
