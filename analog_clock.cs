@@ -10,7 +10,7 @@ using System.Windows.Forms;
 
 static class Program
 {
-    public const string Version = "1.3";
+    public const string Version = "1.4";
 
     [STAThread]
     static void Main()
