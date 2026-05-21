@@ -10,6 +10,8 @@ using System.Windows.Forms;
 
 static class Program
 {
+    public const string Version = "1.3";
+
     [STAThread]
     static void Main()
     {
@@ -33,6 +35,8 @@ static class W32
     [DllImport("user32.dll", SetLastError=true)] public static extern bool UpdateLayeredWindow(IntPtr hwnd, IntPtr hdcDst,
         ref POINT dst, ref SIZE sz, IntPtr hdcSrc, ref POINT src,
         uint key, ref BLENDFUNCTION bf, uint flags);
+    [DllImport("user32.dll", CharSet=CharSet.Ansi)] public static extern bool EnumDisplayDevices(
+        string lpDevice, uint iDevNum, ref DISPLAY_DEVICE lpDisplayDevice, uint dwFlags);
 
     public const int  WM_NCHITTEST  = 0x84;
     public const int  HTTRANSPARENT = -1;
@@ -54,6 +58,19 @@ static class W32
     }
     [StructLayout(LayoutKind.Sequential)]
     public struct BITMAPINFO { public BITMAPINFOHEADER bmiHeader; public int bmiColors; }
+
+    public const uint DD_ATTACHED  = 0x00000001;  // DISPLAY_DEVICE_ATTACHED_TO_DESKTOP
+    public const uint DD_REMOVABLE = 0x00000020;  // DISPLAY_DEVICE_REMOVABLE
+
+    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Ansi)]
+    public struct DISPLAY_DEVICE {
+        public int  cb;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst=32)]  public string DeviceName;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst=128)] public string DeviceString;
+        public uint StateFlags;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst=128)] public string DeviceID;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst=128)] public string DeviceKey;
+    }
 }
 
 // ── Settings ──────────────────────────────────────────────────
@@ -153,10 +170,16 @@ class ClockForm : Form
         TopMost         = true;
         ClientSize      = new Size(cfg.Size, cfg.Size);
 
-        var scr = Screen.PrimaryScreen.WorkingArea;
-        Location = (cfg.PosX >= 0 && cfg.PosX + cfg.Size <= scr.Right)
-            ? new Point(cfg.PosX, cfg.PosY)
-            : new Point(scr.Right - cfg.Size - 20, scr.Bottom - cfg.Size - 20);
+        var builtin = FindBuiltinScreen();
+        var scr = builtin.WorkingArea;
+        // 複数モニター時は常に内蔵スクリーンの左上、単体時は保存済み位置を使用
+        if (Screen.AllScreens.Length > 1) {
+            Location = new Point(scr.Left + 20, scr.Top + 20);
+        } else {
+            Location = (cfg.PosX >= 0)
+                ? new Point(cfg.PosX, cfg.PosY)
+                : new Point(scr.Right - cfg.Size - 20, scr.Bottom - cfg.Size - 20);
+        }
 
         var timer = new System.Windows.Forms.Timer { Interval = 1000 };
         timer.Tick    += (s, e) => UpdateDisplay();
@@ -191,7 +214,7 @@ class ClockForm : Form
     {
         cfg = newCfg;
         ClientSize = new Size(cfg.Size, cfg.Size);
-        var scr = Screen.PrimaryScreen.WorkingArea;
+        var scr = Screen.FromControl(this).WorkingArea;
         if (Left + cfg.Size > scr.Right)  Left = scr.Right  - cfg.Size - 10;
         if (Top  + cfg.Size > scr.Bottom) Top  = scr.Bottom - cfg.Size - 10;
         UpdateDisplay();
@@ -314,12 +337,42 @@ class ClockForm : Form
 
     void DrawClock(Graphics g, int sz)
     {
-        float cx=sz/2f, cy=sz/2f, r=sz/2f-3f;
+        float cx = sz/2f, cy = sz/2f;
+        float bw = Math.Max(3f, sz * 0.03f);   // ベゼル幅
+        float r  = sz/2f - bw;                 // 文字盤の半径
+        float fx = bw, fsz = sz - bw*2;        // 文字盤の矩形
 
-        using (var b = new SolidBrush(cfg.FaceColor))   g.FillEllipse(b, 2, 2, sz-4, sz-4);
-        using (var p = new Pen(cfg.BorderColor, 2f))    g.DrawEllipse(p, 2, 2, sz-4, sz-4);
+        // ── ベゼル（外枠）グラデーション ──
+        using (var path = new GraphicsPath()) {
+            path.AddEllipse(1, 1, sz-2, sz-2);
+            using (var pgb = new PathGradientBrush(path)) {
+                pgb.CenterPoint    = new PointF(cx * 0.6f, cy * 0.4f);
+                pgb.CenterColor    = Blend(cfg.BorderColor, Color.White, 0.30f);
+                pgb.SurroundColors = new[] { Blend(cfg.BorderColor, Color.Black, 0.50f) };
+                g.FillPath(pgb, path);
+            }
+        }
+        // ベゼル内縁の影リング
+        using (var p = new Pen(Color.FromArgb(70, 0, 0, 0), bw * 0.30f))
+            g.DrawEllipse(p, bw * 0.4f, bw * 0.4f, sz - bw * 0.8f, sz - bw * 0.8f);
 
-        for (int i=0; i<60; i++) {
+        // ── 文字盤ベースカラー ──
+        using (var b = new SolidBrush(cfg.FaceColor))
+            g.FillEllipse(b, fx, fx, fsz, fsz);
+
+        // ── ドームグラデーションオーバーレイ（立体感） ──
+        using (var facePath = new GraphicsPath()) {
+            facePath.AddEllipse(fx, fx, fsz, fsz);
+            using (var pgb = new PathGradientBrush(facePath)) {
+                pgb.CenterPoint    = new PointF(cx, cy * 0.80f);
+                pgb.CenterColor    = Color.FromArgb(95, 255, 255, 255);
+                pgb.SurroundColors = new[] { Color.FromArgb(30, 0, 0, 0) };
+                g.FillPath(pgb, facePath);
+            }
+        }
+
+        // ── 目盛り ──
+        for (int i = 0; i < 60; i++) {
             double a = i*6*Math.PI/180; bool hr = (i%5==0);
             float  n = hr ? r-Math.Max(6f,sz*0.05f) : r-Math.Max(3f,sz*0.025f);
             using (var p = new Pen(hr?cfg.TickMajorColor:cfg.TickMinorColor, hr?2f:1f)) {
@@ -329,15 +382,18 @@ class ClockForm : Form
             }
         }
 
+        // ── 数字 ──
         float fSz=Math.Max(7f,sz*0.062f), nr=r-Math.Max(14f,sz*0.115f);
         using (var font=new Font("Segoe UI",fSz)) using (var b=new SolidBrush(cfg.NumberColor)) {
             for (int n=1; n<=12; n++) {
                 double a=n*30*Math.PI/180; string st=n.ToString();
                 SizeF ms=g.MeasureString(st,font);
-                g.DrawString(st,font,b, cx+nr*(float)Math.Sin(a)-ms.Width/2, cy-nr*(float)Math.Cos(a)-ms.Height/2);
+                g.DrawString(st,font,b, cx+nr*(float)Math.Sin(a)-ms.Width/2,
+                                        cy-nr*(float)Math.Cos(a)-ms.Height/2);
             }
         }
 
+        // ── 針 ──
         DateTime now=DateTime.Now;
         double hA=(now.Hour%12+now.Minute/60.0)*30*Math.PI/180;
         double mA=(now.Minute+now.Second/60.0)*6*Math.PI/180;
@@ -352,8 +408,42 @@ class ClockForm : Form
             g.DrawLine(p,cx,cy,  cx+r*0.80f*(float)Math.Sin(sA), cy-r*0.80f*(float)Math.Cos(sA));
             g.DrawLine(p,cx,cy,  cx-r*0.20f*(float)Math.Sin(sA), cy+r*0.20f*(float)Math.Cos(sA)); }
 
+        // ── 中心点 ──
         float dr=Math.Max(3f,sz*0.022f);
         using (var b=new SolidBrush(cfg.CenterColor)) g.FillEllipse(b, cx-dr, cy-dr, dr*2, dr*2);
+    }
+
+    static Color Blend(Color a, Color b, float t) {
+        return Color.FromArgb(
+            (int)(a.R*(1-t)+b.R*t),
+            (int)(a.G*(1-t)+b.G*t),
+            (int)(a.B*(1-t)+b.B*t));
+    }
+
+    // 内蔵ディスプレイを検出して返す。見つからない場合はプライマリスクリーンを返す。
+    static Screen FindBuiltinScreen()
+    {
+        try {
+            var dd = new W32.DISPLAY_DEVICE();
+            dd.cb = Marshal.SizeOf(dd);
+            for (uint i = 0; W32.EnumDisplayDevices(null, i, ref dd, 0); i++) {
+                // デスクトップに接続されているアダプタのみ対象
+                if ((dd.StateFlags & W32.DD_ATTACHED) == 0) { dd.cb = Marshal.SizeOf(dd); continue; }
+                string adapterName = dd.DeviceName;
+                // このアダプタに接続されているモニターを調べる
+                var mon = new W32.DISPLAY_DEVICE();
+                mon.cb = Marshal.SizeOf(mon);
+                if (W32.EnumDisplayDevices(adapterName, 0, ref mon, 0)) {
+                    // REMOVABLE フラグがない = 取り外し不可 = 内蔵ディスプレイ
+                    if ((mon.StateFlags & W32.DD_REMOVABLE) == 0) {
+                        foreach (var scr in Screen.AllScreens)
+                            if (scr.DeviceName == adapterName) return scr;
+                    }
+                }
+                dd.cb = Marshal.SizeOf(dd);
+            }
+        } catch {}
+        return Screen.PrimaryScreen;
     }
 }
 
@@ -411,7 +501,7 @@ class SettingsForm : Form
 
         Text            = "Clock Settings";
         Width           = 320;
-        Height          = 560;
+        Height          = 590;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox     = false; MinimizeBox = false;
         StartPosition   = FormStartPosition.Manual;
@@ -470,6 +560,17 @@ class SettingsForm : Form
         var bClose = new Button { Text="Close", Location=new Point(222,y), Size=new Size(72,28) };
         bClose.Click += (s,e) => Close();
         Add(bClose); CancelButton=bClose;
+
+        y += 38;
+        var lbVer = new Label {
+            Text      = "Analog Clock  v" + Program.Version,
+            Location  = new Point(14, y),
+            Size      = new Size(278, 18),
+            ForeColor = Color.Gray,
+            Font      = new Font("Segoe UI", 8f),
+            TextAlign = System.Drawing.ContentAlignment.MiddleRight,
+        };
+        Add(lbVer);
     }
 
     void Add(Control c) { Controls.Add(c); }
